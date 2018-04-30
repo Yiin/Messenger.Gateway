@@ -3,22 +3,24 @@ require('dotenv').config();
 
 // app
 const app = require('express')();
+app.use(require('body-parser').json());
+
+// messenger service
+const MessengerService = require('./messenger-service');
 
 // database
-const client = require('mongodb').MongoClient;
-
-client.connect(process.env.DATABASE, (err) => {
-  if (err) {
-    console.error(err);
-    process.exit();
-  } else {
-    console.log('Connected to database.');
-  }
-});
+const database = require('./database').connect();
 
 // routes
-app.get('/', (req, res) => {
-  res.json({ hello: 'world' });
+app.get('/authenticate', (req, res) => {
+  const messengerService = new MessengerService(database, req.body);
+  const authenticationDetails = messengerService.getAuthenticationDetails();
+  const contacts = messengerService.getContacts();
+
+  res.json({
+    ...authenticationDetails,
+    users: contacts,
+  });
 });
 
 // run
