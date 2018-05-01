@@ -1,19 +1,19 @@
 // database
 const client = require('mongodb').MongoClient;
 
-export default {
-  connect: async () => {
-    let database;
-
+module.exports = {
+  connect: async function connect() {
+    console.log('Connecting to database...');
     try {
-      database = await client.connect(process.env.DATABASE);
+      const database = await client.connect(process.env.DATABASE);
+
+      console.log('Connected to database.');
+
+      return database;
     } catch (e) {
-      console.error(e.getMessage());
-      process.exit();
+      console.log('Retrying in one second...');
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      return connect();
     }
-
-    console.log('Connected to database.');
-
-    return database;
   },
 };

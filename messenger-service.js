@@ -13,6 +13,7 @@ async function getUsers() {
 
 class MessengerService {
   constructor(database, { client, userId }) {
+    console.log('new MessengerService', client, userId);
     this.accounts = database.collection('accounts');
     this.client = client;
     this.userId = userId;
@@ -24,27 +25,27 @@ class MessengerService {
   /**
    * Get user authentication data.
    */
-  getAuthenticationDetails() {
-    if (this.hasCachedDetails()) {
-      if (this.cachedDetailsStillValid()) {
-        this.configureDefaultGroups();
+  async getAuthenticationDetails() {
+    if (await this.hasCachedDetails()) {
+      if (await this.cachedDetailsStillValid()) {
+        await this.configureDefaultGroups();
         return this.messenger;
       }
       if (!this.messengerExists) {
-        this.createRocketChatUser();
+        await this.createRocketChatUser();
       }
     } else {
-      this.createAndCacheRocketChatUser();
+      await this.createAndCacheRocketChatUser();
     }
-    this.configureDefaultGroups();
+    await this.configureDefaultGroups();
     return this.loginToRocketChat();
   }
 
   /**
    * Authorize API requests with admin account.
    */
-  loginAsAdmin() {
-    this.messengerClient.loginAs(
+  async loginAsAdmin() {
+    return this.messengerClient.loginAs(
       process.env.ROCKET_CHAT_ADMIN_USERNAME,
       process.env.ROCKET_CHAT_ADMIN_PASSWORD,
     );
@@ -53,7 +54,7 @@ class MessengerService {
   /**
    * Authorize API requests using with user account.
    */
-  authenticateAsUser(callback) {
+  async authenticateAsUser(callback) {
     return this.messengerClient.authenticateWith(
       this.messenger.authToken,
       this.messenger.userId,
@@ -61,8 +62,8 @@ class MessengerService {
     );
   }
 
-  hasCachedDetails() {
-    const account = this.accounts.findOne({ uid: this.userId });
+  async hasCachedDetails() {
+    const account = await this.accounts.findOne({ uid: this.userId });
 
     if (account) {
       this.messenger = account;
@@ -71,13 +72,13 @@ class MessengerService {
     return !!account;
   }
 
-  cachedDetailsStillValid() {
+  async cachedDetailsStillValid() {
     if (!this.messenger.authToken) {
       return false;
     }
-    return this.authenticateAsUser(() => {
+    return this.authenticateAsUser(async () => {
       try {
-        this.messengerClient.authenticationAPI().me();
+        await this.messengerClient.authenticationAPI().me();
         return true;
       } catch (e) {
         return false;
@@ -85,16 +86,16 @@ class MessengerService {
     });
   }
 
-  rocketChatUserExists(uid = null) {
+  async rocketChatUserExists(uid = null) {
     try {
-      this.messengerClient.usersAPI().info('username', this.makeUsername(uid || this.userId));
+      await this.messengerClient.usersAPI().info('username', this.makeUsername(uid || this.userId));
       return true;
     } catch (e) {
       return false;
     }
   }
 
-  createRocketChatUser(user = null) {
+  async createRocketChatUser(user = null) {
     const key = MessengerService.generateRocketChatKey();
 
     let uid;
@@ -114,7 +115,7 @@ class MessengerService {
     let messengerUserId;
 
     try {
-      response = this.messengerClient.usersAPI().register(
+      response = await this.messengerClient.usersAPI().register(
         this.makeUsername(uid),
         key,
         name,
@@ -122,7 +123,7 @@ class MessengerService {
       );
     } catch (e) {
       if (!user) {
-        messengerUserId = this.changeRocketChatUserPassword(key).userId;
+        messengerUserId = await this.changeRocketChatUserPassword(key).userId;
       }
     }
 
@@ -136,20 +137,20 @@ class MessengerService {
     };
   }
 
-  createAndCacheRocketChatUser() {
+  async createAndCacheRocketChatUser() {
     try {
       this.messenger = {
         ...this.messenger,
-        ...this.createRocketChatUser(),
+        ...await this.createRocketChatUser(),
       };
     } catch (e) {
       this.messenger = {
         ...this.messenger,
-        ...this.changeRocketChatUserPassword(),
+        ...await this.changeRocketChatUserPassword(),
       };
     }
 
-    this.accounts.update({
+    await this.accounts.update({
       erUserId: this.erUserId,
     }, {
       messengerUserId: this.messenger.userId,
@@ -157,13 +158,13 @@ class MessengerService {
     });
   }
 
-  changeRocketChatUserPassword(key = MessengerService.generateRocketChatKey()) {
+  async changeRocketChatUserPassword(key = MessengerService.generateRocketChatKey()) {
     this.loginAsAdmin();
 
-    const { user } = this.messengerClient.usersAPI().info('username', this.makeUsername(this.userId));
+    const { user } = await this.messengerClient.usersAPI().info('username', this.makeUsername(this.userId));
     const messengerUserId = user._id;
 
-    this.messengerClient.usersAPI().update(messengerUserId, {
+    await this.messengerClient.usersAPI().update(messengerUserId, {
       password: key,
     });
 
@@ -173,27 +174,27 @@ class MessengerService {
     };
   }
 
-  loginToRocketChat() {
+  async loginToRocketChat() {
     let authData;
 
     try {
-      authData = this.messengerClient.authenticationAPI().login(
+      authData = await this.messengerClient.authenticationAPI().login(
         this.makeUsername(this.userId),
         this.messenger.key,
       );
     } catch (e) {
       this.messenger = {
         ...this.messenger,
-        ...this.changeRocketChatUserPassword(),
+        ...await this.changeRocketChatUserPassword(),
       };
 
-      authData = this.messengerClient.authenticationAPI().login(
+      authData = await this.messengerClient.authenticationAPI().login(
         this.makeUsername(this.userId),
         this.messenger.key,
       );
     }
 
-    this.accounts.update({
+    await this.accounts.update({
       erUserId: this.userId,
     }, {
       authToken: this.messenger.authToken,
@@ -209,9 +210,9 @@ class MessengerService {
       .filter(user => user.uid !== this.userId);
 
     for (const user of users) {
-      if (!this.rocketChatUserExists(user.uid)) {
-        const { userId } = this.createRocketChatUser(user);
-        this.configureDefaultGroups(userId);
+      if (!await this.rocketChatUserExists(user.uid)) {
+        const { userId } = await this.createRocketChatUser(user);
+        await this.configureDefaultGroups(userId);
       }
       user.username = this.makeUsername(user.uid);
     }
@@ -219,10 +220,10 @@ class MessengerService {
     return users;
   }
 
-  configureDefaultGroups(messengerUserId = this.messenger.userId) {
+  async configureDefaultGroups(messengerUserId = this.messenger.userId) {
     // Kick from general channel
     try {
-      this.messengerClient.channelsAPI().kick('GENERAL', messengerUserId);
+      await this.messengerClient.channelsAPI().kick('GENERAL', messengerUserId);
     } catch (e) {
       // user is not in the channel
     }
@@ -237,4 +238,4 @@ class MessengerService {
   }
 }
 
-export default MessengerService;
+module.exports = MessengerService;
