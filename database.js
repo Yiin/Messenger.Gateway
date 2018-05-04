@@ -9,7 +9,7 @@ module.exports = {
 
       console.log('Connected to database.');
 
-      return database;
+      return database.db('messenger');
     } catch (e) {
       console.log('Retrying in one second...');
       await new Promise(resolve => setTimeout(resolve, 1000));

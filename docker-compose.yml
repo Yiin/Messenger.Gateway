@@ -6,8 +6,7 @@ services:
     build: .
     ports:
       - "4000:4000"
-    links:
-      - mongo
+    network_mode: "host"
   mongo:
     container_name: mongo
     image: mongo

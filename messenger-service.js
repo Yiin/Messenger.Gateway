@@ -1,34 +1,34 @@
 const axios = require('axios');
-const MessengerClient = require('rocketchat');
+const MessengerClient = require('./messenger-rest-api-client');
 
-async function getUsers() {
-  const { data } = await axios.get('/users', {
+async function getUsers(client) {
+  const response = await axios.get(`${process.env.ERAPP_API_URL}/${client}/users`, {
     headers: {
       'X-Temporary-API-Token': process.env.ER_API_TEMP_TOKEN,
     },
   });
 
-  return data;
+  return response.data;
 }
 
 class MessengerService {
   constructor(database, { client, userId }) {
-    console.log('new MessengerService', client, userId);
     this.accounts = database.collection('accounts');
     this.client = client;
     this.userId = userId;
     this.messengerClient = new MessengerClient(process.env.MESSENGER_API_URL);
-
-    this.loginAsAdmin();
   }
 
   /**
    * Get user authentication data.
    */
   async getAuthenticationDetails() {
+    await this.fetchUsers();
+
     if (await this.hasCachedDetails()) {
       if (await this.cachedDetailsStillValid()) {
         await this.configureDefaultGroups();
+        console.log('use cachedDetails');
         return this.messenger;
       }
       if (!this.messengerExists) {
@@ -39,6 +39,20 @@ class MessengerService {
     }
     await this.configureDefaultGroups();
     return this.loginToRocketChat();
+  }
+
+  async fetchUsers() {
+    if (this.users) {
+      return;
+    }
+    this.users = await getUsers(this.client);
+    const me = this.users.find(user => +user.id === +this.userId);
+
+    if (!me) {
+      throw new Error('We don\'t exist.');
+    }
+
+    this.me = me;
   }
 
   /**
@@ -57,13 +71,14 @@ class MessengerService {
   async authenticateAsUser(callback) {
     return this.messengerClient.authenticateWith(
       this.messenger.authToken,
-      this.messenger.userId,
+      this.messenger.messengerUserId,
       callback,
     );
   }
 
   async hasCachedDetails() {
-    const account = await this.accounts.findOne({ uid: this.userId });
+    console.log('hasCachedDetails');
+    const account = await this.accounts.findOne({ erUserId: this.userId });
 
     if (account) {
       this.messenger = account;
@@ -73,6 +88,7 @@ class MessengerService {
   }
 
   async cachedDetailsStillValid() {
+    console.log('cachedDetailsStillValid');
     if (!this.messenger.authToken) {
       return false;
     }
@@ -87,6 +103,7 @@ class MessengerService {
   }
 
   async rocketChatUserExists(uid = null) {
+    console.log('rocketChatUserExists', uid);
     try {
       await this.messengerClient.usersAPI().info('username', this.makeUsername(uid || this.userId));
       return true;
@@ -95,35 +112,37 @@ class MessengerService {
     }
   }
 
-  async createRocketChatUser(user = null) {
+  async createRocketChatUser(erUser = null) {
+    console.log('createRocketChatUser', erUser);
     const key = MessengerService.generateRocketChatKey();
 
-    let uid;
+    let erUserId;
     let name;
 
-    if (user) {
-      uid = user.uid;
-      name = user.name;
+    if (erUser) {
+      erUserId = erUser.id;
+      name = erUser.full_name;
     } else {
-      uid = this.userId;
-      name = this.name;
+      erUserId = this.userId;
+      name = this.me.full_name;
     }
 
-    const email = `${this.client}-${uid}@erapp.dk`;
+    const email = `${this.client}-${erUserId}@erapp.dk`;
 
     let response;
     let messengerUserId;
 
     try {
       response = await this.messengerClient.usersAPI().register(
-        this.makeUsername(uid),
+        this.makeUsername(erUserId),
         key,
         name,
         email,
       );
     } catch (e) {
-      if (!user) {
-        messengerUserId = await this.changeRocketChatUserPassword(key).userId;
+      // Change password only if we were trying to create user for ourselves.
+      if (!erUser) {
+        messengerUserId = (await this.changeRocketChatUserPassword(key)).userId;
       }
     }
 
@@ -138,12 +157,14 @@ class MessengerService {
   }
 
   async createAndCacheRocketChatUser() {
+    console.log('createAndCacheRocketChatUser');
     try {
       this.messenger = {
         ...this.messenger,
         ...await this.createRocketChatUser(),
       };
     } catch (e) {
+      console.log('createRocketChatUser threw an exception O.o', e);
       this.messenger = {
         ...this.messenger,
         ...await this.changeRocketChatUserPassword(),
@@ -153,15 +174,15 @@ class MessengerService {
     await this.accounts.update({
       erUserId: this.erUserId,
     }, {
-      messengerUserId: this.messenger.userId,
+      messengerUserId: this.messenger.messengerUserId,
       authToken: this.messenger.authToken,
     });
   }
 
   async changeRocketChatUserPassword(key = MessengerService.generateRocketChatKey()) {
-    this.loginAsAdmin();
-
+    console.log('changeRocketChatUserPassword');
     const { user } = await this.messengerClient.usersAPI().info('username', this.makeUsername(this.userId));
+
     const messengerUserId = user._id;
 
     await this.messengerClient.usersAPI().update(messengerUserId, {
@@ -175,6 +196,7 @@ class MessengerService {
   }
 
   async loginToRocketChat() {
+    console.log('loginToRocketChat');
     let authData;
 
     try {
@@ -205,22 +227,22 @@ class MessengerService {
   }
 
   async getContacts() {
-    const users = await getUsers()
+    const users = this.users
       // exclude ourselves
-      .filter(user => user.uid !== this.userId);
+      .filter(user => user.id !== this.userId);
 
     for (const user of users) {
-      if (!await this.rocketChatUserExists(user.uid)) {
+      if (!await this.rocketChatUserExists(user.id)) {
         const { userId } = await this.createRocketChatUser(user);
         await this.configureDefaultGroups(userId);
       }
-      user.username = this.makeUsername(user.uid);
+      user.username = this.makeUsername(user.id);
     }
 
     return users;
   }
 
-  async configureDefaultGroups(messengerUserId = this.messenger.userId) {
+  async configureDefaultGroups(messengerUserId = this.messenger.messengerUserId) {
     // Kick from general channel
     try {
       await this.messengerClient.channelsAPI().kick('GENERAL', messengerUserId);

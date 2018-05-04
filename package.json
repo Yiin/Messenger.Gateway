@@ -4,7 +4,9 @@
     "body-parser": "^1.18.2",
     "dotenv": "^5.0.1",
     "express": "^4.16.3",
-    "mongodb": "^3.0.7",
+    "mongodb": "2.2.33",
+    "node-cleanup": "^2.1.2",
+    "npm": "^6.0.0",
     "rocketchat": "^0.57.3-alpha"
   },
   "devDependencies": {

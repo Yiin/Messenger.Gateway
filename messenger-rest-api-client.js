@@ -1,12 +1,15 @@
-import axios from 'axios';
+const axios = require('axios');
 
 class Client {
   constructor(apiUrl) {
     const trimmedUrl = apiUrl.replace(/^\/+|\/+$/g, ''); // trim('/')
+    console.log('apiUrl', trimmedUrl);
     axios.defaults.baseURL = `${trimmedUrl}/`;
   }
 
   async loginAs(username, password) {
+    console.log('loginAs', username, password);
+
     const response = await Client.post('login', {
       username,
       password,
@@ -14,7 +17,10 @@ class Client {
 
     if ((response.status || 'error') !== 'success') {
       this.auth = null;
-      throw this.createExceptionFromResponse(response, 'loginAs');
+      console.error('loginAs failed:', username, password, response);
+      throw response;
+    } else {
+      console.log('Logged in.', response.data);
     }
 
     this.auth = response.data;
@@ -47,13 +53,13 @@ class Client {
 
   usersAPI() {
     return {
-      info: async (identifier, value) => this.getWithAuth('users.info', {
+      info: async (identifier, value) => (this.getWithAuth('users.info', {
         params: {
           [identifier]: value,
         },
-      }),
-      register: (username, password, name, email, optionalSecretURL = null) => Client.post('users.register', {
-        username, password, name, email, ...(optionalSecretURL ? { optionalSecretURL } : {}),
+      })),
+      register: (username, pass, name, email, optionalSecretURL = null) => Client.post('users.register', {
+        username, pass, name, email, ...(optionalSecretURL ? { secretURL: optionalSecretURL } : {}),
       }),
       update: async (userId, data = {}) => this.postWithAuth('users.update', {
         userId, data,
@@ -73,17 +79,22 @@ class Client {
    * Helper methods
    */
   static async get(endpoint, config = {}) {
-    return axios.get(endpoint, config).data;
+    return (await axios.get(endpoint, config)).data;
   }
 
   static async post(endpoint, data = {}, config = {}) {
-    return axios.post(endpoint, data, config);
+    if (endpoint === 'users.update') {
+      console.log('users.update', data);
+    }
+    return (await axios.post(endpoint, data, config)).data;
   }
 
   async getWithAuth(endpoint, config = {}) {
     if (!this.auth) {
+      console.log('Not authenticated, fallback to guest GET request');
       return Client.get(endpoint, config);
     }
+    console.log('Authenticated GET request', endpoint, config, this.auth);
     return Client.get(endpoint, {
       ...config,
       headers: {
