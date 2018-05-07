@@ -15,7 +15,7 @@ class MessengerService {
   constructor(database, { client, userId }) {
     this.accounts = database.collection('accounts');
     this.client = client;
-    this.userId = userId;
+    this.erUserId = userId;
     this.messengerClient = new MessengerClient(process.env.MESSENGER_API_URL);
   }
 
@@ -28,7 +28,6 @@ class MessengerService {
     if (await this.hasCachedDetails()) {
       if (await this.cachedDetailsStillValid()) {
         await this.configureDefaultGroups();
-        console.log('use cachedDetails');
         return this.messenger;
       }
       if (!this.messengerExists) {
@@ -42,11 +41,11 @@ class MessengerService {
   }
 
   async fetchUsers() {
-    if (this.users) {
+    if (this.erUsers) {
       return;
     }
-    this.users = await getUsers(this.client);
-    const me = this.users.find(user => +user.id === +this.userId);
+    this.erUsers = await getUsers(this.client);
+    const me = this.erUsers.find(erUser => +erUser.id === +this.erUserId);
 
     if (!me) {
       throw new Error('We don\'t exist.');
@@ -77,8 +76,7 @@ class MessengerService {
   }
 
   async hasCachedDetails() {
-    console.log('hasCachedDetails');
-    const account = await this.accounts.findOne({ erUserId: this.userId });
+    const account = await this.accounts.findOne({ _id: this.erUserId });
 
     if (account) {
       this.messenger = account;
@@ -88,7 +86,6 @@ class MessengerService {
   }
 
   async cachedDetailsStillValid() {
-    console.log('cachedDetailsStillValid');
     if (!this.messenger.authToken) {
       return false;
     }
@@ -103,9 +100,8 @@ class MessengerService {
   }
 
   async rocketChatUserExists(uid = null) {
-    console.log('rocketChatUserExists', uid);
     try {
-      await this.messengerClient.usersAPI().info('username', this.makeUsername(uid || this.userId));
+      await this.messengerClient.usersAPI().info('username', this.makeUsername(uid || this.erUserId));
       return true;
     } catch (e) {
       return false;
@@ -113,7 +109,6 @@ class MessengerService {
   }
 
   async createRocketChatUser(erUser = null) {
-    console.log('createRocketChatUser', erUser);
     const key = MessengerService.generateRocketChatKey();
 
     let erUserId;
@@ -123,7 +118,7 @@ class MessengerService {
       erUserId = erUser.id;
       name = erUser.full_name;
     } else {
-      erUserId = this.userId;
+      erUserId = this.erUserId;
       name = this.me.full_name;
     }
 
@@ -142,7 +137,7 @@ class MessengerService {
     } catch (e) {
       // Change password only if we were trying to create user for ourselves.
       if (!erUser) {
-        messengerUserId = (await this.changeRocketChatUserPassword(key)).userId;
+        messengerUserId = (await this.changeRocketChatUserPassword(key)).messengerUserId;
       }
     }
 
@@ -151,20 +146,18 @@ class MessengerService {
     }
 
     return {
-      userId: messengerUserId,
+      messengerUserId,
       key,
     };
   }
 
   async createAndCacheRocketChatUser() {
-    console.log('createAndCacheRocketChatUser');
     try {
       this.messenger = {
         ...this.messenger,
         ...await this.createRocketChatUser(),
       };
     } catch (e) {
-      console.log('createRocketChatUser threw an exception O.o', e);
       this.messenger = {
         ...this.messenger,
         ...await this.changeRocketChatUserPassword(),
@@ -172,16 +165,16 @@ class MessengerService {
     }
 
     await this.accounts.update({
-      erUserId: this.erUserId,
+      _id: this.erUserId,
     }, {
-      messengerUserId: this.messenger.messengerUserId,
-      authToken: this.messenger.authToken,
+      $set: this.messenger,
+    }, {
+      upsert: true,
     });
   }
 
   async changeRocketChatUserPassword(key = MessengerService.generateRocketChatKey()) {
-    console.log('changeRocketChatUserPassword');
-    const { user } = await this.messengerClient.usersAPI().info('username', this.makeUsername(this.userId));
+    const { user } = await this.messengerClient.usersAPI().info('username', this.makeUsername(this.erUserId));
 
     const messengerUserId = user._id;
 
@@ -190,51 +183,54 @@ class MessengerService {
     });
 
     return {
-      userId: messengerUserId,
+      messengerUserId,
       key,
     };
   }
 
   async loginToRocketChat() {
-    console.log('loginToRocketChat');
     let authData;
 
     try {
-      authData = await this.messengerClient.authenticationAPI().login(
-        this.makeUsername(this.userId),
+      authData = (await this.messengerClient.authenticationAPI().login(
+        this.makeUsername(this.erUserId),
         this.messenger.key,
-      );
+      )).data;
     } catch (e) {
       this.messenger = {
         ...this.messenger,
         ...await this.changeRocketChatUserPassword(),
       };
 
-      authData = await this.messengerClient.authenticationAPI().login(
-        this.makeUsername(this.userId),
+      authData = (await this.messengerClient.authenticationAPI().login(
+        this.makeUsername(this.erUserId),
         this.messenger.key,
-      );
+      )).data;
     }
 
     await this.accounts.update({
-      erUserId: this.userId,
+      _id: this.erUserId,
     }, {
-      authToken: this.messenger.authToken,
-      key: this.messenger.key,
+      $set: {
+        authToken: authData ? authData.authToken : this.messenger.authToken,
+        key: this.messenger.key,
+      },
+    }, {
+      upsert: true,
     });
 
     return authData;
   }
 
   async getContacts() {
-    const users = this.users
+    const users = this.erUsers
       // exclude ourselves
-      .filter(user => user.id !== this.userId);
+      .filter(user => user.id !== this.erUserId);
 
     for (const user of users) {
       if (!await this.rocketChatUserExists(user.id)) {
-        const { userId } = await this.createRocketChatUser(user);
-        await this.configureDefaultGroups(userId);
+        const { messengerUserId } = await this.createRocketChatUser(user);
+        await this.configureDefaultGroups(messengerUserId);
       }
       user.username = this.makeUsername(user.id);
     }
