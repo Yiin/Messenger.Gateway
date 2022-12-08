@@ -3,7 +3,7 @@
     "axios": "^0.18.0",
     "body-parser": "^1.18.2",
     "dotenv": "^5.0.1",
-    "express": "^4.16.3",
+    "express": "^4.17.3",
     "mongodb": "2.2.33",
     "node-cleanup": "^2.1.2",
     "npm": "^6.0.0",
